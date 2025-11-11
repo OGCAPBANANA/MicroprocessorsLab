@@ -1,17 +1,15 @@
 #include <xc.inc>
-
-global  LCD_Setup, LCD_Write_Message, LCD_Send_Byte_I, LCD_delay_ms, LCD_Clear_Display
+global  LCD_Setup, LCD_Write_Message, LCD_Send_Byte_I, LCD_delay_ms
+global  LCD_Clear_Display, LCD_Set_Position, LCD_Write_Message_PM
 
 psect	udata_acs   ; named variables in access ram
 LCD_cnt_l:	ds 1   ; reserve 1 byte for variable LCD_cnt_l
 LCD_cnt_h:	ds 1   ; reserve 1 byte for variable LCD_cnt_h
 LCD_cnt_ms:	ds 1   ; reserve 1 byte for ms counter
 LCD_tmp:	ds 1   ; reserve 1 byte for temporary use
-LCD_counter:	ds 1   ; reserve 1 byte for counting through nessage
-
+LCD_counter:	ds 1   ; reserve 1 byte for counting through message
 	LCD_E	EQU 5	; LCD enable bit
     	LCD_RS	EQU 4	; LCD register select bit
-
 psect	lcd_code,class=CODE
     
 LCD_Setup:
@@ -53,6 +51,37 @@ LCD_Loop_message:
 	call    LCD_Send_Byte_D
 	decfsz  LCD_counter, A
 	bra	LCD_Loop_message
+	return
+
+; ***** NEW ROUTINE: Write message directly from Program Memory *****
+; TBLPTR must point to start of message in PM, length in W
+LCD_Write_Message_PM:
+	movwf   LCD_counter, A
+LCD_Loop_PM:
+	tblrd*+			; read byte from PM to TABLAT, increment pointer
+	movf	TABLAT, W, A	; move data to W
+	call    LCD_Send_Byte_D	; send to LCD
+	decfsz  LCD_counter, A
+	bra	LCD_Loop_PM
+	return
+
+; ***** NEW ROUTINE: Set cursor position *****
+; Call with position in W (0x00-0x0F for line 1, 0x40-0x4F for line 2)
+; For convenience: Line 1 position N: pass N
+;                  Line 2 position N: pass 0x40 + N
+LCD_Set_Position:
+	addlw	0x80		; Add set DDRAM address command bit
+	call	LCD_Send_Byte_I
+	movlw	20		; wait 40us
+	call	LCD_delay_x4us
+	return
+
+; ***** NEW ROUTINE: Clear Display *****
+LCD_Clear_Display:
+	movlw   0x01		; Clear display command
+	call    LCD_Send_Byte_I
+	movlw   2		; Wait 2ms for command to complete
+	call    LCD_delay_ms
 	return
 
 LCD_Send_Byte_I:	    ; Transmits byte stored in W to instruction reg
@@ -124,20 +153,13 @@ LCD_delay_x4us:		    ; delay given in chunks of 4 microsecond in W
 	andwf	LCD_cnt_l, F, A ; keep high nibble in LCD_cnt_l
 	call	LCD_delay
 	return
-LCD_Clear_Display:
-    movlw   0x01            ; Clear display command
-    call    LCD_Send_Byte_I ; Send to instruction register
-    movlw   2               ; Wait 2ms for command to complete
-    call    LCD_delay_ms
-    return
+
 LCD_delay:			; delay routine	4 instruction loop == 250ns	    
 	movlw 	0x00		; W=0
 lcdlp1:	decf 	LCD_cnt_l, F, A	; no carry when 0x00 -> 0xff
 	subwfb 	LCD_cnt_h, F, A	; no carry when 0x00 -> 0xff
 	bc 	lcdlp1		; carry, then loop again
 	return			; carry reset so return
-
-
     end
 
 
