@@ -1,56 +1,249 @@
 #include <xc.inc>
 
-extrn	UART_Setup, UART_Transmit_Message  ; external subroutines
-	
-psect	udata_acs   ; reserve data space in access ram
-counter:    ds 1    ; reserve one byte for a counter variable
-delay_count:ds 1    ; reserve one byte for counter in the delay routine
+
+; Port Definitions - Adjust based on your hardware connections
+GLCD_DATA    EQU     PORTD      ; 8-bit data bus
+GLCD_CTRL    EQU     PORTB      ; Control signals
+
+; Control Pin Definitions
+     RS          EQU     2          ; PORTB, bit 0 - Register Select
+     RW_mine     EQU     3          ; PORTB, bit 1 - Read/Write  
+     EN          EQU     4          ; PORTB, bit 2 - Enable
+     CS1         EQU     0          ; PORTB, bit 3 - Chip Select 1 (left controller)
+     CS2         EQU     1          ; PORTB, bit 4 - Chip Select 2 (right controller)
+	 
+
+;Variables in access RAM
+psect	 UDATA
+temp:    ds     1
+temp2:    ds     1    ; Add second variable
     
-psect	udata_bank4 ; reserve data anywhere in RAM (here at 0x400)
-myArray:    ds 0x80 ; reserve 128 bytes for message data
+; Code Section
+psect    CODE
+    ORG     0x0000
+    GOTO    Main
 
-psect	data    
-	; ******* myTable, data in programme memory, and its length *****
-myTable:
-	db	'H','e','l','l','o',' ','W','o','r','l','d','!',0x0a
-					; message, plus carriage return
-	myTable_l   EQU	13	; length of data
-	align	2
+
+; Delay subroutine - approximately 1ms
+Delay:
+    MOVLW   0x50
+    MOVWF   temp          ; initialize temp
+Delay_Loop:
+    DECFSZ  temp, F       ; decrement temp, skip if zero
+    BRA     Delay_Loop    ; Use BRA instead of GOTO
+    RETURN
+
+; Longer delay using Delay() as inner loop
+Long_Delay:
+    MOVLW   0x5
+    MOVWF   temp2         ; Use temp2 instead of temp
+Long_Delay_Outer:
+    CALL    Delay
+    DECFSZ  temp2, F      ; Use temp2 instead of temp
+    BRA     Long_Delay_Outer
+    RETURN
+; Send command to GLCD
     
-psect	code, abs	
-rst: 	org 0x0
- 	goto	setup
+; Input: WREG contains command byte
+GLCD_Command:
+    BCF     GLCD_CTRL, RS      ; RS=0 for command
+    BCF     GLCD_CTRL, RW_mine ; R/W=0 for write
+    MOVWF   GLCD_DATA          ; Send command on data bus
+    BSF     GLCD_CTRL, EN      ; Pulse enable high
+    NOP
+    BCF     GLCD_CTRL, EN      ; Pulse enable low (FIXED - was commented!)
+    CALL    Delay              ; Wait for command to process
+    RETURN
+    
+GLCD_WriteData:
+    BSF     GLCD_CTRL, RS      ; RS=1 for data (FIXED - was BCF!)
+    BCF     GLCD_CTRL, RW_mine ; RW=0 (write)
+    MOVWF   GLCD_DATA          ; Put data on port
+    BSF     GLCD_CTRL, EN      ; Enable pulse
+    NOP
+    BCF     GLCD_CTRL, EN
+    CALL    Delay
+    RETURN
+    
+GLCD_SetPage:
+    ; Command = 0xB8 + page
+    ADDLW   0xB8
+    CALL    GLCD_Command
+    RETURN
 
-	; ******* Programme FLASH read Setup Code ***********************
-setup:	bcf	CFGS	; point to Flash program memory  
-	bsf	EEPGD 	; access Flash program memory
-	call	UART_Setup	; setup UART
-	goto	start
-	
-	; ******* Main programme ****************************************
-start: 	lfsr	0, myArray	; Load FSR0 with address in RAM	
-	movlw	low highword(myTable)	; address of data in PM
-	movwf	TBLPTRU, A		; load upper bits to TBLPTRU
-	movlw	high(myTable)	; address of data in PM
-	movwf	TBLPTRH, A		; load high byte to TBLPTRH
-	movlw	low(myTable)	; address of data in PM
-	movwf	TBLPTRL, A		; load low byte to TBLPTRL
-	movlw	myTable_l	; bytes to read
-	movwf 	counter, A		; our counter register
-loop: 	tblrd*+			; one byte from PM to TABLAT, increment TBLPRT
-	movff	TABLAT, POSTINC0; move data from TABLAT to (FSR0), inc FSR0	
-	decfsz	counter, A		; count down to zero
-	bra	loop		; keep going until finished
-		
-	movlw	myTable_l	; output message to UART
-	lfsr	2, myArray
-	call	UART_Transmit_Message
+; Set column (Y = 0?63 per controller)
+GLCD_SetColumn:
+    ; Command = 0x40 + column
+    ADDLW   0x40
+    CALL    GLCD_Command
+    RETURN
+    
+; Initialize GLCD
+Init_GLCD:
+    ; Set data port as output
+    CLRF    TRISD
+    
+    ; Set control port as output
+    CLRF    TRISB              ; Changed to CLRF for clarity
+    
+    ; Deselect both controllers initially (active low!)
+    BSF     GLCD_CTRL, CS1     ; FIXED - deselect
+    BSF     GLCD_CTRL, CS2     ; FIXED - deselect
+    
+    ; Wait for GLCD to power up
+    CALL    Long_Delay
+    
+    ; Initialize left controller (CS1)
+    BCF     GLCD_CTRL, CS1     ; FIXED - Select left (active low)
+    BSF     GLCD_CTRL, CS2     ; FIXED - Deselect right
+    
+    MOVLW   0x3F               ; FIXED - Display ON (was 0x3E = OFF!)
+    CALL    GLCD_Command
+    
+    MOVLW   0x40               ; Set Y address to 0
+    CALL    GLCD_Command
+    
+    MOVLW   0xB8               ; Set page address to 0
+    CALL    GLCD_Command
+    
+    MOVLW   0xC0               ; Set start line to 0
+    CALL    GLCD_Command
+    
+    ; Initialize right controller (CS2)  
+    BSF     GLCD_CTRL, CS1     ; FIXED - Deselect left
+    BCF     GLCD_CTRL, CS2     ; FIXED - Select right
+    
+    MOVLW   0x3F               ; FIXED - Display ON (was 0x3E!)
+    CALL    GLCD_Command
+    
+    MOVLW   0x40               ; Set Y address to 0
+    CALL    GLCD_Command
+    
+    MOVLW   0xB8               ; Set page address to 0
+    CALL    GLCD_Command
+    
+    MOVLW   0xC0               ; Set start line to 0
+    CALL    GLCD_Command
+    
+    RETURN
 
-	goto	$		; goto current line in code
+; Turn on both displays (This might be redundant now)
+GLCD_DisplayOn:
+    ; Turn on left display
+    BCF     GLCD_CTRL, CS1     ; Select left
+    BSF     GLCD_CTRL, CS2     ; Deselect right
+    
+    MOVLW   0x3F               ; FIXED - Display ON (was 0x3E!)
+    CALL    GLCD_Command
+    
+    ; Turn on right display
+    BSF     GLCD_CTRL, CS1     ; Deselect left
+    BCF     GLCD_CTRL, CS2     ; Select right
+    
+    MOVLW   0x3F               ; FIXED - Display ON (was 0x3E!)
+    CALL    GLCD_Command
+    
+    ; Deselect both for safety
+    BSF     GLCD_CTRL, CS1
+    BSF     GLCD_CTRL, CS2
+    
+    RETURN
 
-	; a delay subroutine if you need one, times around loop in delay_count
-delay:	decfsz	delay_count, A	; decrement until zero
-	bra	delay
-	return
+; Main program
+Main:
+    CALL    Init_GLCD          ; Initialize the GLCD
+    CALL    GLCD_DisplayOn     ; Turn on the display
+    CALL    Display_HELLO
+    
+Display_HELLO:
+    ; Select only left controller (0?63 pixels)
+    BCF     GLCD_CTRL, CS1
+    BSF     GLCD_CTRL, CS2
 
-	end	rst
+    ; Draw on page 0 (top 8 rows)
+    MOVLW   0x00
+    CALL    GLCD_SetPage
+
+    ; Start at column 0
+    MOVLW   0x00
+    CALL    GLCD_SetColumn
+
+    ; ---- H ----
+    MOVLW   0x7F    ; #######
+    CALL    GLCD_WriteData
+    MOVLW   0x08
+    CALL    GLCD_WriteData
+    MOVLW   0x08
+    CALL    GLCD_WriteData
+    MOVLW   0x08
+    CALL    GLCD_WriteData
+    MOVLW   0x7F
+    CALL    GLCD_WriteData
+    MOVLW   0x00    ; spacing column
+    CALL    GLCD_WriteData
+
+    ; ---- E ----
+    MOVLW   0x7F
+    CALL    GLCD_WriteData
+    MOVLW   0x49
+    CALL    GLCD_WriteData
+    MOVLW   0x49
+    CALL    GLCD_WriteData
+    MOVLW   0x49
+    CALL    GLCD_WriteData
+    MOVLW   0x41
+    CALL    GLCD_WriteData
+    MOVLW   0x00
+    CALL    GLCD_WriteData
+
+    ; ---- L ----
+    MOVLW   0x7F
+    CALL    GLCD_WriteData
+    MOVLW   0x01
+    CALL    GLCD_WriteData
+    MOVLW   0x01
+    CALL    GLCD_WriteData
+    MOVLW   0x01
+    CALL    GLCD_WriteData
+    MOVLW   0x01
+    CALL    GLCD_WriteData
+    MOVLW   0x00
+    CALL    GLCD_WriteData
+
+    ; ---- L ---- (second L)
+    MOVLW   0x7F
+    CALL    GLCD_WriteData
+    MOVLW   0x01
+    CALL    GLCD_WriteData
+    MOVLW   0x01
+    CALL    GLCD_WriteData
+    MOVLW   0x01
+    CALL    GLCD_WriteData
+    MOVLW   0x01
+    CALL    GLCD_WriteData
+    MOVLW   0x00
+    CALL    GLCD_WriteData
+
+    ; ---- O ----
+    MOVLW   0x3E
+    CALL    GLCD_WriteData
+    MOVLW   0x41
+    CALL    GLCD_WriteData
+    MOVLW   0x41
+    CALL    GLCD_WriteData
+    MOVLW   0x41
+    CALL    GLCD_WriteData
+    MOVLW   0x3E
+    CALL    GLCD_WriteData
+    MOVLW   0x00
+    CALL    GLCD_WriteData
+
+    RETURN
+    
+    ; Your main program loop here
+Main_Loop:
+    ; Add your application code here
+    
+    BRA     Main_Loop          ; Infinite loop
+
+    END
