@@ -1081,7 +1081,7 @@
                   value=""/>
         <property key="warningmessagebreakoptions.warningmessages" value="holdstate"/>
       </Tool>
-      <item path="main.s" ex="true" overriding="false">
+      <item path="main.s" ex="false" overriding="false">
         <pic-as-assembler>
         </pic-as-assembler>
         <pic-as-global>
