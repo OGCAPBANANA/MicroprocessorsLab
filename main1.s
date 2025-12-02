@@ -5,6 +5,8 @@
 
 #include <xc.inc>
 
+    
+    
 ;-------------------------------------------------------------------------------
 ; Hardware Configuration
 ;-------------------------------------------------------------------------------
@@ -31,6 +33,7 @@ CS2_BIT         EQU     1
 RS_BIT          EQU     2
 RW_BIT          EQU     3
 EN_BIT          EQU     4
+RST_BIT         EQU     5 
 
 ; GLCD Commands
 CMD_DISPLAY_ON  EQU     0x3F
@@ -43,24 +46,23 @@ CMD_START_LINE  EQU     0xC0    ; Display start line base
 ; Variables
 ;-------------------------------------------------------------------------------
 psect   udata_acs
-delay_counter1: DS  1
+outer_counter:  DS  1
+inner_counter:  DS  1
 delay_counter2: DS  1
 delay_counter3: DS  1
+delay_counter4: DS  1
 save_wreg:      DS  1           ; For preserving WREG
 loop_counter:   DS  1
 
 ;-------------------------------------------------------------------------------
 ; Reset Vector
 ;-------------------------------------------------------------------------------
-psect   resetVec, class=CODE, reloc=2
-resetVec:
-    GOTO    Main
-
-;-------------------------------------------------------------------------------
-; Main Code Section
-;-------------------------------------------------------------------------------
+psect   code, abs
+org     0x0  
+Start:
+      goto  Main
+      
 psect   code
-
 ;===============================================================================
 ; DELAY ROUTINES
 ;===============================================================================
@@ -69,20 +71,28 @@ psect   code
 ; Short delay (~1ms at 4MHz) 
 ;-------------------------------------------------------------------------------
 Delay_1ms:
-    MOVLW   0xFA
-    MOVWF   delay_counter1
-Delay_1ms_loop:
-    NOP
-    NOP
-    DECFSZ  delay_counter1, F
-    BRA     Delay_1ms_loop
-    RETURN
+    MOVLW   0x10        ; outer = 16
+    MOVWF   outer_counter
 
+OuterLoop:
+    MOVLW   0x32        ; inner = 50
+    MOVWF   inner_counter
+
+InnerLoop:
+    NOP
+    NOP
+    DECFSZ  inner_counter, F
+    BRA     InnerLoop
+
+    DECFSZ  outer_counter, F
+    BRA     OuterLoop
+
+    RETURN
 ;-------------------------------------------------------------------------------
 ; Medium delay (~100ms)
 ;-------------------------------------------------------------------------------
 Delay_100ms:
-    MOVLW   0x64                ; 100 iterations
+    MOVLW   0x64                ; should be 0x64
     MOVWF   delay_counter2
 Delay_100ms_loop:
     CALL    Delay_1ms
@@ -94,7 +104,7 @@ Delay_100ms_loop:
 ; Long delay (~500ms) for power-up
 ;-------------------------------------------------------------------------------
 Delay_500ms:
-    MOVLW   0x05
+    MOVLW   0x05          ;should be 0x05
     MOVWF   delay_counter3
 Delay_500ms_loop:
     CALL    Delay_100ms
@@ -151,7 +161,9 @@ GLCD_Command:
     
     MOVF    save_wreg, W        ; Restore WREG
     MOVWF   DATA_PORT           ; Output command
-    
+    NOP
+    NOP
+    NOP
     NOP
     NOP
     BSF     CTRL_PORT, EN_BIT   ; EN = 1 (start pulse)
@@ -159,10 +171,13 @@ GLCD_Command:
     NOP
     NOP
     NOP
+    NOP
     BCF     CTRL_PORT, EN_BIT   ; EN = 0 (end pulse)
     NOP
     NOP
-    
+    NOP
+    NOP
+    NOP
     CALL    Delay_1ms           ; Command execution time
     
     MOVF    save_wreg, W        ; Restore WREG
@@ -181,7 +196,9 @@ GLCD_WriteData:
     
     MOVF    save_wreg, W        ; Restore WREG
     MOVWF   DATA_PORT           ; Output data
-    
+    NOP
+    NOP
+    NOP
     NOP
     NOP
     BSF     CTRL_PORT, EN_BIT   ; EN = 1 (start pulse)
@@ -189,11 +206,14 @@ GLCD_WriteData:
     NOP
     NOP
     NOP
+    NOP
     BCF     CTRL_PORT, EN_BIT   ; EN = 0 (end pulse)
     NOP
     NOP
-    
-    CALL    Delay_1ms           ; Data write time
+    NOP
+    NOP
+    NOP
+    CALL    Delay_500ms           ; Data write time
     
     MOVF    save_wreg, W        ; Restore WREG
     RETURN
@@ -209,6 +229,8 @@ GLCD_WriteData:
 GLCD_SetPage:
     ADDLW   CMD_SET_X           ; Add page base command
     CALL    GLCD_Command
+    NOP
+    NOP
     RETURN
 
 ;-------------------------------------------------------------------------------
@@ -218,6 +240,8 @@ GLCD_SetPage:
 GLCD_SetColumn:
     ADDLW   CMD_SET_Y           ; Add column base command
     CALL    GLCD_Command
+    NOP
+    NOP
     RETURN
 
 ;-------------------------------------------------------------------------------
@@ -239,13 +263,12 @@ Clear_Left_Loop:
     
     ; Write 64 zeros
     MOVLW   0x40                ; 64 columns
-    MOVWF   delay_counter1
+    MOVWF   delay_counter4
 Clear_Left_Col:
     MOVLW   0x00
     CALL    GLCD_WriteData
-    DECFSZ  delay_counter1, F
+    DECFSZ  delay_counter4, F
     BRA     Clear_Left_Col
-    
     INCF    loop_counter, F
     MOVLW   0x08
     CPFSEQ  loop_counter
@@ -265,11 +288,11 @@ Clear_Right_Loop:
     CALL    GLCD_SetColumn
     
     MOVLW   0x40
-    MOVWF   delay_counter1
+    MOVWF   delay_counter4
 Clear_Right_Col:
     MOVLW   0x00
     CALL    GLCD_WriteData
-    DECFSZ  delay_counter1, F
+    DECFSZ  delay_counter4, F
     BRA     Clear_Right_Col
     
     INCF    loop_counter, F
@@ -285,8 +308,8 @@ Clear_Right_Col:
 ; Input: W = controller to init (0=left, 1=right, 2=both)
 ;-------------------------------------------------------------------------------
 GLCD_Init_Controller:
-    ; Display ON
-    MOVLW   CMD_DISPLAY_ON
+    ; Display OFF first
+    MOVLW   CMD_DISPLAY_OFF
     CALL    GLCD_Command
     
     ; Set start line to 0
@@ -301,9 +324,12 @@ GLCD_Init_Controller:
     MOVLW   0x00
     CALL    GLCD_SetColumn
     
-    CALL    Delay_100ms
+    ; Display ON
+    MOVLW   CMD_DISPLAY_ON
+    CALL    GLCD_Command
+    
+    CALL    Delay_500ms
     RETURN
-
 ;===============================================================================
 ; MAIN INITIALIZATION
 ;===============================================================================
@@ -327,6 +353,15 @@ GLCD_Init:
     
     ; Wait for power stabilization
     CALL    Delay_500ms
+    
+        BSF     CTRL_PORT, RST_BIT  ; RST=1 (inactive/high)
+    CALL    Delay_500ms         ; Wait for power stabilization
+    
+    BCF     CTRL_PORT, RST_BIT  ; RST=0 (activate reset - LOW)
+    CALL    Delay_500ms           ; Hold reset for at least 1ms
+    
+    BSF     CTRL_PORT, RST_BIT  ; RST=1 (release reset)
+    CALL    Delay_500ms         ; Wait for controllers to initialize
     
     ; Initialize left controller
     CALL    Select_Left
