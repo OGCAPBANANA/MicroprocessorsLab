@@ -15,6 +15,7 @@ main:
 
 	org	0x100		    ; Main code starts here at address 0x100
 start:
+	banksel temp
 	movlw 	0x0
 	movwf	TRISJ, A
 	movlw   0x01
